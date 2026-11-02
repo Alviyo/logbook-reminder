@@ -1,0 +1,110 @@
+name: Logbook Reminder
+on:
+  schedule:
+    - cron: '5 9 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TELEGRAM_TOKEN: "8975600757:AAHb0VIZc7qcB1eDFBW9TCWm3XmOFVdmveA"
+      CHAT_ID: "1259136419"
+      GH_TOKEN: "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"
+      GIST_ID: "a632595c5367e8957ed93d1110602f5b"
+    steps:
+      - name: Run logbook reminder
+        run: |
+          cat > /tmp/reminder.mjs << 'ENDSCRIPT'
+          const token = process.env.TELEGRAM_TOKEN;
+          const chatId = process.env.CHAT_ID;
+          const ghToken = process.env.GH_TOKEN;
+          const gistId = process.env.GIST_ID;
+
+          async function checkHeartbeat() {
+            const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' });
+            const today = now.split(' ')[0];
+            const r = await fetch('https://api.github.com/gists/' + gistId, {
+              headers: { Authorization: 'token ' + ghToken, Accept: 'application/vnd.github.v3+json' }
+            });
+            const d = await r.json();
+            const hb = JSON.parse(d.files['heartbeat.json'].content);
+            console.log('Heartbeat date:', hb.date, '| Today WIB:', today);
+            return hb.date === today;
+          }
+
+          async function sendMsg(text) {
+            await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+            });
+          }
+
+          async function getLastId() {
+            const r = await fetch('https://api.telegram.org/bot' + token + '/getUpdates?limit=1&timeout=0');
+            const d = await r.json();
+            if (d.ok && d.result.length) return d.result[d.result.length - 1].update_id;
+            return 0;
+          }
+
+          async function checkReply(lastId) {
+            const r = await fetch('https://api.telegram.org/bot' + token + '/getUpdates?offset=' + (lastId + 1) + '&timeout=2&limit=5');
+            const d = await r.json();
+            if (d.ok && d.result.length > 0) {
+              return { replied: true, lastId: d.result[d.result.length - 1].update_id };
+            }
+            return { replied: false, lastId };
+          }
+
+          async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          const SPAMS = [
+            '\u26a0\ufe0f *LOGBOOK BELUM DIISI!*\nKamu tidak masuk hari ini\u2014jangan lupa isi logbook manual!',
+            '\ud83d\udd14 *PENGINGAT LOGBOOK!*\nLogbook MagangHub tutup jam 23:59 malam ini!',
+            '\ud83d\udccb *LOGBOOK NIH!*\nJangan sampai kelewat lagi ya!',
+            '\ud83d\ude28 *HEY! LOGBOOK BELUM KEISI!*\nMasih bisa, buka bot ini sekarang!',
+            '\ud83d\udea8 *URGENT: LOGBOOK!*\nBalas pesan ini atau tap sesuatu untuk stop notif dan dapat link!',
+          ];
+
+          async function main() {
+            const laptopOn = await checkHeartbeat().catch(() => false);
+            if (laptopOn) {
+              console.log('Laptop nyala hari ini, logbook automation berjalan. Exit.');
+              return;
+            }
+
+            console.log('Laptop tidak terdeteksi, mulai spam reminder...');
+            let lastId = await getLastId();
+            let count = 0;
+            let replied = false;
+
+            while (count < 30 && !replied) {
+              const c1 = await checkReply(lastId);
+              lastId = c1.lastId;
+              if (c1.replied) { replied = true; break; }
+
+              await sendMsg(SPAMS[count % SPAMS.length]);
+              count++;
+
+              for (let i = 0; i < 4; i++) {
+                await sleep(1000);
+                const c2 = await checkReply(lastId);
+                lastId = c2.lastId;
+                if (c2.replied) { replied = true; break; }
+              }
+            }
+
+            if (replied) {
+              await sendMsg('\u2705 *Oke! Isi logbook di sini:*\n\n\ud83d\udc49 https://monev.maganghub.kemnaker.go.id/dashboard\n\n_Ingat: tutup jam 23:59 malam ini!_');
+              console.log('User replied, link logbook dikirim.');
+            } else {
+              await sendMsg('\u23f0 *Reminder terakhir!*\nLogbook belum diisi.\nIsi sebelum 23:59:\n\ud83d\udc49 https://monev.maganghub.kemnaker.go.id/dashboard');
+              console.log('Max spam, final reminder dikirim.');
+            }
+          }
+
+          main().catch(e => { console.error(e); process.exit(1); });
+          ENDSCRIPT
+          node /tmp/reminder.mjs
