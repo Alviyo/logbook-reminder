@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      TELEGRAM_TOKEN: "8975600757:AAHb0VIZc7qcB1eDFBW9TCWm3XmOFVdmveA"
-      CHAT_ID: "1259136419"
-      GH_TOKEN: "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"
-      GIST_ID: "a632595c5367e8957ed93d1110602f5b"
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      CHAT_ID: ${{ secrets.CHAT_ID }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GIST_ID: ${{ secrets.GIST_ID }}
     steps:
       - name: Check heartbeat and remind if needed
         run: |
