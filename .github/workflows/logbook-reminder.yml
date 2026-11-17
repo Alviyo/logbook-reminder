@@ -1,9 +1,14 @@
 name: Logbook Reminder
 on:
   schedule:
-    - cron: '0 2 * * 1-5'   # 09:00 WIB — cek pagi (laptop nyala atau tidak)
-    - cron: '0 5 * * 1-5'   # 12:00 WIB — cek siang (kalau masih belum nyala)
-    - cron: '0 9 * * 1-5'   # 16:00 WIB — cek sore (backup kalau masih izin)
+    - cron: '0 2 * * 1-5'    # 09:00 WIB — cek pagi + spam 1 jam pertama
+    - cron: '0 4 * * 1-5'    # 11:00 WIB — lanjut 15 menit
+    - cron: '0 6 * * 1-5'    # 13:00 WIB — lanjut 15 menit
+    - cron: '0 8 * * 1-5'    # 15:00 WIB — lanjut 15 menit
+    - cron: '0 10 * * 1-5'   # 17:00 WIB — lanjut 15 menit
+    - cron: '0 12 * * 1-5'   # 19:00 WIB — lanjut 15 menit
+    - cron: '0 14 * * 1-5'   # 21:00 WIB — lanjut 15 menit
+    - cron: '0 16 * * 1-5'   # 23:00 WIB — run terakhir sebelum midnight
   workflow_dispatch:
 
 jobs:
@@ -29,7 +34,8 @@ jobs:
           }
 
           function getNowHourWIB() {
-            return parseInt(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta', hour: 'numeric', hour12: false }));
+            const s = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta', hour: 'numeric', hour12: false });
+            return parseInt(s);
           }
 
           async function checkHeartbeat() {
@@ -46,14 +52,11 @@ jobs:
           async function sendMsg(text, keyboard) {
             const body = { chat_id: chatId, text, parse_mode: 'Markdown' };
             if (keyboard) body.reply_markup = { inline_keyboard: keyboard };
-            const r = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+            await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body)
             });
-            const d = await r.json();
-            if (!d.ok) console.log('Telegram error:', JSON.stringify(d));
-            return d;
           }
 
           async function getLastId() {
@@ -75,65 +78,90 @@ jobs:
           function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
           const SPAMS = [
-            '📋 *Logbook belum diisi nih!*\nSeperti nya kamu izin atau WFH hari ini—jangan lupa isi logbook manual ya!\n\nBalas pesan ini untuk dapat link langsung! 👇',
-            '🔔 *Reminder: Logbook MagangHub!*\nLogbook hari ini belum terdeteksi diisi.\nBalas pesan ini untuk dapat link pengisian! 👇',
-            '📌 *Hei, cek logbook dulu!*\nSudah siang nih, logbook belum keisi.\nBalas untuk dapat link langsung! 👇',
-            '⏰ *Jangan lupa logbook!*\nMasih ada waktu, langsung isi ya!\nBalas pesan ini untuk link pengisian! 👇',
-            '🚨 *Logbook belum diisi!*\nSudah sore, segera isi sebelum lupa!\nBalas pesan ini! 👇',
+            '⚠️ *LOGBOOK BELUM DIISI!*\nKamu sepertinya izin hari ini—jangan lupa isi logbook manual!\n\nBalas pesan ini untuk dapat link langsung! 👇',
+            '🔔 *PENGINGAT LOGBOOK!*\nLogbook MagangHub belum terisi hari ini!\nBalas untuk dapat link pengisian! 👇',
+            '📋 *Hei, logbook dulu!*\nJangan sampai lupa ya—deadline 23:59 malam ini!\nBalas pesan ini! 👇',
+            '🚨 *LOGBOOK BELUM KEISI!*\nSegera isi sebelum kelewatan!\nBalas untuk link langsung! 👇',
+            '⏰ *Jangan lupa logbook!*\nMasih ada waktu, balas pesan ini untuk link pengisian! 👇',
           ];
-
-          const INTERVAL_MS = 15 * 60 * 1000; // 15 menit antar reminder (aman dari Telegram ban)
-          const MAX_REMINDERS = 6; // max 6 per run = cover ~90 menit
 
           async function main() {
             const today = getTodayWIB();
             const nowHour = getNowHourWIB();
             const logbookLink = 'https://monev.maganghub.kemnaker.go.id/dashboard/riwayat?date=' + today + '&view=edit';
 
-            console.log('Jam WIB:', nowHour + ':xx | Tanggal:', today);
+            console.log('Jam WIB sekarang:', nowHour + ':xx | Tanggal:', today);
 
-            // Jangan kirim alert di luar jam kerja (sebelum 09:00 atau setelah 20:00)
-            if (nowHour < 9 || nowHour >= 20) {
-              console.log('Di luar jam kerja (sebelum 09:00 atau setelah 20:00), skip.');
+            // Jangan kirim alert setelah 23:00 (mendekati midnight)
+            if (nowHour >= 23) {
+              console.log('Jam 23:xx — run terakhir sebelum midnight, kirim 1 reminder saja.');
+              const laptopOn = await checkHeartbeat().catch(() => false);
+              if (laptopOn) { console.log('Laptop nyala, skip.'); return; }
+              await sendMsg('⏰ *Reminder terakhir malam ini!*\nLogbook belum diisi hari ini.\n\n👉 ' + logbookLink + '\n\n_Deadline: 23:59 malam ini!_');
               return;
             }
 
             const laptopOn = await checkHeartbeat().catch(() => false);
             if (laptopOn) {
-              console.log('Laptop nyala hari ini, logbook automation berjalan. Exit.');
+              console.log('Laptop nyala hari ini, logbook automation aktif. Exit.');
               return;
             }
 
-            console.log('Laptop tidak terdeteksi (kemungkinan izin). Mulai kirim reminder...');
+            console.log('Laptop tidak terdeteksi (kemungkinan izin).');
             let lastId = await getLastId();
-            let count = 0;
             let replied = false;
+            let count = 0;
 
-            while (count < MAX_REMINDERS && !replied) {
-              // Cek reply dulu sebelum kirim
-              const c1 = await checkReply(lastId);
-              lastId = c1.lastId;
-              if (c1.replied) { replied = true; break; }
+            // === FASE 1: Jam 09:00-10:00 — SPAM tiap 3 detik selama 60 menit ===
+            if (nowHour < 10) {
+              console.log('=== FASE SPAM (09:00-10:00): tiap 3 detik ===');
+              const spamEnd = Date.now() + 60 * 60 * 1000; // 60 menit
 
-              const msg = SPAMS[count % SPAMS.length];
-              await sendMsg(msg);
-              count++;
-              console.log('[Reminder #' + count + '] terkirim jam ' + new Date().toLocaleString('id-ID', {timeZone:'Asia/Jakarta'}));
+              while (Date.now() < spamEnd && !replied) {
+                const c = await checkReply(lastId);
+                lastId = c.lastId;
+                if (c.replied) { replied = true; break; }
 
-              // Tunggu 15 menit sambil cek reply tiap 1 menit
-              for (let i = 0; i < 15 && !replied; i++) {
-                await sleep(60 * 1000); // 1 menit
-                const c2 = await checkReply(lastId);
-                lastId = c2.lastId;
-                if (c2.replied) { replied = true; }
+                await sendMsg(SPAMS[count % SPAMS.length]);
+                count++;
+                if (count % 50 === 0) console.log('[Spam #' + count + '] terkirim...');
+
+                await sleep(3000); // 3 detik
+              }
+
+              if (!replied) console.log('Fase spam selesai (' + count + ' pesan). Lanjut 15-menit...');
+            }
+
+            // === FASE 2: Tiap 15 menit hingga akhir job (90 menit per run) ===
+            if (!replied) {
+              console.log('=== FASE 15 MENIT ===');
+              const jobEnd = Date.now() + (nowHour < 10 ? 30 : 90) * 60 * 1000; // sisa waktu job
+
+              while (Date.now() < jobEnd && !replied) {
+                const c = await checkReply(lastId);
+                lastId = c.lastId;
+                if (c.replied) { replied = true; break; }
+
+                await sendMsg(SPAMS[count % SPAMS.length]);
+                count++;
+                console.log('[Reminder #' + count + '] tiap-15-menit terkirim jam ' + new Date().toLocaleString('id-ID', {timeZone:'Asia/Jakarta'}));
+
+                // Tunggu 15 menit sambil cek reply tiap 30 detik
+                const waitUntil = Date.now() + 15 * 60 * 1000;
+                while (Date.now() < waitUntil && !replied) {
+                  await sleep(30000);
+                  const c2 = await checkReply(lastId);
+                  lastId = c2.lastId;
+                  if (c2.replied) { replied = true; }
+                }
               }
             }
 
             if (replied) {
-              await sendMsg('✅ *Oke! Langsung isi logbook di sini:*\n\n👉 ' + logbookLink + '\n\n_Ingat: tutup jam 23:59 malam ini!_');
-              console.log('User replied, link logbook dikirim.');
+              await sendMsg('✅ *Oke! Langsung isi logbook di sini:*\n\n👉 ' + logbookLink + '\n\n_Ingat: deadline 23:59 malam ini!_');
+              console.log('User replied! Link logbook dikirim. SELESAI.');
             } else {
-              console.log('Max reminder (' + MAX_REMINDERS + 'x) tercapai untuk run ini. Run berikutnya akan cek lagi.');
+              console.log('Job selesai. Run berikutnya akan lanjut cek.');
             }
           }
 
